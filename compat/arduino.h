@@ -51,7 +51,10 @@ inline void ledcWrite(int pin, int duty) { (void)pin; (void)duty; }
 // ── Serial stub ───────────────────────────────────────────────────────────────
 struct HardwareSerial {
     void begin(int baud)        { (void)baud; }
-    void println(const char* s) { printf("[ESP] %s\n", s); }
+    void println(const char* s) {
+    // suppress noisy PID messages in sim output
+    if (strstr(s, "[PID]") == nullptr)
+        printf("[ESP] %s\n", s);}
     void print(const char* s)   { printf("%s", s); }
     void printf(const char* fmt, ...) {
         va_list a; va_start(a,fmt); vprintf(fmt,a); va_end(a);

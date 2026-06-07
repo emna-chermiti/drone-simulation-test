@@ -4,7 +4,7 @@ import ctypes, numpy as np, gymnasium
 import PyFlyt.gym_envs
 from imu_simulator import IMUSimulator
 
-lib = ctypes.CDLL(r"C:\Users\rober\Desktop\simulation exaple\sim_bridge.dll")
+lib = ctypes.CDLL(r"C:\Users\rober\Desktop\drone-simulation-test\sim_bridge.dll")
 
 class SimInput(ctypes.Structure):
     _fields_ = [("obs",       ctypes.c_float * 16),
@@ -32,13 +32,13 @@ lib.sim_init()
 
 imu_sim = IMUSimulator()
 env     = gymnasium.make("PyFlyt/QuadX-Hover-v4",
-                          render_mode="human", agent_hz=40)
+                         render_mode="human", agent_hz=40)
 obs, _  = env.reset()
 lib.sim_reset()
 
 sim_in = SimInput(); att = SimAttitude(); motors = SimMotors()
 
-BASE_THRUST = 120   # your HOVER_THRUST constant
+BASE_THRUST = 200   # your HOVER_THRUST constant
 
 print(f"{'Step':>5} | {'Roll':>7} | {'Pitch':>7} | "
       f"{'M1(FL)':>7} | {'M2(FR)':>7} | {'M3(RR)':>7} | {'M4(RL)':>7} | Check")
@@ -77,9 +77,11 @@ for step in range(3000):
         print(f"{step:5d} | {att.roll:7.2f}° | {att.pitch:7.2f}° | "
               f"{m[0]:7.3f} | {m[1]:7.3f} | {m[2]:7.3f} | {m[3]:7.3f} | {check}")
 
-    obs, _, terminated, truncated, _ = env.step(np.array(m, dtype=np.float32))
+    # Run the physics step using a correctly formatted numpy array layout
+    motor_array = np.array(m, dtype=np.float32)
+    obs, reward, terminated, truncated, _ = env.step(motor_array)
+    
     if terminated or truncated:
-        obs, _ = env.reset()
-        lib.sim_reset()
+        print(f"--- Environment flagged a boundary hit at step {step}, but keeping engine alive! ---")
 
 env.close()
