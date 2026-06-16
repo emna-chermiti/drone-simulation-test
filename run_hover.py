@@ -46,7 +46,6 @@ imu_sim   = IMUSimulator()
 motor_lag = MotorModel(DRONE_PARAMS)
 
 def make_env():
-
     return gymnasium.make(
         "PyFlyt/QuadX-Hover-v4",
         render_mode="human",
@@ -62,6 +61,11 @@ def safe_close(e):
 
 def fresh_start():
     e = make_env()
+    # Spawn the drone on the ground. We set start_pos directly on the
+    # unwrapped env so begin_reset picks it up. Y=0.05 puts the body just
+    # above the floor — the cf2x drone body extends ~5cm below its origin,
+    # so 0.05 is the minimum safe height.
+    e.unwrapped.start_pos = np.array([[0.0, 0.05, 0.0]])
     o, _ = e.reset()
     lib.sim_reset()
     motor_lag.reset()
@@ -70,9 +74,9 @@ def fresh_start():
 
 HZ = 40
 MISSION_PROFILE = [
-    ("TAKEOFF", 4.0,  1.5),   # climb from start (~0.95m) up to 1.5m
-    ("HOVER",   4.0,  1.5),   # hold at 1.5m for 4 seconds
-    ("LAND",    4.0,  0.05),  # descend back toward ground
+    ("TAKEOFF", 3.0,  1.2),   # climb from start (~0.95m) up to 1.2m
+    ("HOVER",   1.5,  1.2),   # hold at 1.2m for 1.5 seconds
+    ("LAND",    3.0,  0.05),  # descend back toward ground
 ]
 
 TOTAL_STEPS = int(sum(item[1] for item in MISSION_PROFILE) * HZ)
