@@ -49,7 +49,7 @@ by `run_hover.py`.
 
 ```bash
 # from the project root, in a git-bash / MSYS shell
-cd "C:\Users\rober\Desktop\drone-simulation-test"
+cd "your_project_path"
 
 # 1. Build the C++ bridge into a DLL
 /c/msys64/mingw64/bin/g++.exe -O2 -shared -fPIC -o sim_bridge_v2.dll \
@@ -62,7 +62,7 @@ cd "C:\Users\rober\Desktop\drone-simulation-test"
     -I. -I./compat -I./flight -I./power -I./system
 
 # 2. Run the mission (uses the system Python that has PyFlyt installed)
-"C:/Users/rober/AppData/Local/Programs/Python/Python311/python.exe" run_hover.py
+python run_hover.py
 ```
 
 A PyBullet window opens showing the drone. Console output looks like:
