@@ -1,33 +1,43 @@
-# imu_simulator.py — tuned to your real MPU6050 specs
 import numpy as np
 
 class IMUSimulator:
     def __init__(self):
-        # MPU6050 datasheet values for ±500°/s, ±8g config
-        # These match YOUR calibration constants exactly
-        self.gyro_noise_std  = 0.05    # deg/s RMS noise at 500Hz
-        self.accel_noise_std = 0.05    # m/s² noise at ±8g range
+        self.gyro_noise_std  = 0.05    
+        self.accel_noise_std = 0.05    
         self.gyro_bias       = np.zeros(3)
         self.accel_bias      = np.zeros(3)
-        # Slow drift — simulates temperature-induced bias shift
         self.bias_walk_std   = 0.0002
 
     def update_bias(self):
         self.gyro_bias  += np.random.randn(3) * self.bias_walk_std
         self.accel_bias += np.random.randn(3) * self.bias_walk_std
-
+    
     def get_imu(self, obs):
         self.update_bias()
+        qx, qy, qz, qw = obs[3:7]
 
-        # Gyro: add noise and drift to PyFlyt's clean angular velocity
+        r00 = 1.0 - 2.0 * (qy**2 + qz**2)
+        r01 = 2.0 * (qx*qy + qz*qw)
+        r02 = 2.0 * (qx*qz - qy*qw)
+
+        r10 = 2.0 * (qx*qy - qz*qw)
+        r11 = 1.0 - 2.0 * (qx**2 + qz**2)
+        r12 = 2.0 * (qy*qz + qx*qw)
+
+        r20 = 2.0 * (qx*qz + qy*qw)
+        r21 = 2.0 * (qy*qz - qx*qw)
+        r22 = 1.0 - 2.0 * (qx**2 + qy**2)
+
+        g_world = 9.81
+        accel_true = np.array([
+            r20 * g_world,
+            r21 * g_world,
+            r22 * g_world
+        ])
         gyro_rads  = obs[0:3]
         gyro_degs  = gyro_rads * (180.0 / np.pi)
         gyro_meas  = gyro_degs + self.gyro_bias + \
                      np.random.randn(3) * self.gyro_noise_std
-
-        # Accel: gravity vector rotated by current attitude
-        # At hover, accel ≈ [0, 0, 9.81] m/s² in body frame
-        accel_true = np.array([0.0, 0.0, 9.81])
         accel_meas = accel_true + self.accel_bias + \
                      np.random.randn(3) * self.accel_noise_std
 

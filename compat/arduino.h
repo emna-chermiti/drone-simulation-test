@@ -12,7 +12,6 @@
 using std::max;
 using std::min;
 
-// ── Timing ────────────────────────────────────────────────────────────────────
 inline unsigned long micros() {
     using namespace std::chrono;
     return (unsigned long)duration_cast<microseconds>(
@@ -26,7 +25,6 @@ inline unsigned long millis() {
 inline void delay(unsigned long ms)            { (void)ms; }
 inline void delayMicroseconds(unsigned int us) { (void)us; }
 
-// ── Math ──────────────────────────────────────────────────────────────────────
 template<typename T>
 inline T constrain(T x, T lo, T hi) { return x<lo?lo:(x>hi?hi:x); }
 
@@ -42,17 +40,14 @@ inline T map(T x, T iL, T iH, T oL, T oH) {
 #define RAD_TO_DEG (180.0f/PI)
 #define TWO_PI     (2.0f*PI)
 
-// ── LEDC stubs (motor PWM — no-op in sim) ────────────────────────────────────
 inline void ledcAttach(int pin, int freq, int res) {
     (void)pin; (void)freq; (void)res;
 }
 inline void ledcWrite(int pin, int duty) { (void)pin; (void)duty; }
 
-// ── Serial stub ───────────────────────────────────────────────────────────────
 struct HardwareSerial {
     void begin(int baud)        { (void)baud; }
     void println(const char* s) {
-    // suppress noisy PID messages in sim output
     if (strstr(s, "[PID]") == nullptr)
         printf("[ESP] %s\n", s);}
     void print(const char* s)   { printf("%s", s); }
@@ -64,11 +59,9 @@ struct HardwareSerial {
 };
 extern HardwareSerial Serial;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 typedef uint8_t  byte;
 typedef bool     boolean;
-// ── Motor constants (from motors.h — duplicated here so power_distrib.cpp
-//    always sees them regardless of include order) ──────────────────────────
+
 #ifndef MOTOR_MIN
   #define MOTOR_MIN        30
 #endif

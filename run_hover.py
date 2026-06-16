@@ -1,10 +1,12 @@
-import ctypes, numpy as np, gymnasium
+import ctypes
+import numpy as np
+import gymnasium
 import PyFlyt.gym_envs
 from imu_simulator import IMUSimulator
 from motor_model    import MotorModel
 from drone_params   import DRONE_PARAMS
 
-lib = ctypes.CDLL(r"C:\Users\rober\Desktop\drone-simulation-test\sim_bridge.dll")
+lib = ctypes.CDLL(r"C:\Users\rober\Desktop\drone-simulation-test\sim_bridge_v2.dll")
 
 class SimInput(ctypes.Structure):
     _fields_ = [("obs",       ctypes.c_float * 16),
@@ -23,8 +25,18 @@ lib.sim_reset.restype = None; lib.sim_reset.argtypes = []
 lib.sim_update_full.restype  = None
 lib.sim_update_full.argtypes = [
     ctypes.POINTER(SimInput),
-    ctypes.c_float, ctypes.c_float,
-    ctypes.c_float, ctypes.c_uint8,
+    ctypes.c_float, ctypes.c_float, ctypes.c_float,
+    ctypes.c_uint8,
+    ctypes.POINTER(SimMotors),
+    ctypes.POINTER(SimAttitude),
+]
+lib.sim_update_highlevel.restype  = None
+lib.sim_update_highlevel.argtypes = [
+    ctypes.POINTER(SimInput),
+    ctypes.c_float,  # target_yaw_rate
+    ctypes.c_float,  # roll_cmd
+    ctypes.c_float,  # pitch_cmd
+    ctypes.c_uint8,  # base_thrust 
     ctypes.POINTER(SimMotors),
     ctypes.POINTER(SimAttitude),
 ]
@@ -34,12 +46,14 @@ imu_sim   = IMUSimulator()
 motor_lag = MotorModel(DRONE_PARAMS)
 
 def make_env():
+
     return gymnasium.make(
         "PyFlyt/QuadX-Hover-v4",
-        render_mode=None,
+        render_mode="human",
         flight_dome_size=500.0,
         agent_hz=40,
-        max_duration_seconds=120
+        max_duration_seconds=120,
+        angle_representation="euler",
     )
 
 def safe_close(e):
@@ -53,103 +67,71 @@ def fresh_start():
     motor_lag.reset()
     return e, o
 
-HZ = 40
 
-# Mission: (label, duration_seconds, final_target_altitude)
-MISSION = [
-    ("TAKEOFF",  8,  1.5),
-    ("HOVER",   10,  1.5),
-    ("DESCEND",  8,  0.3),
-    ("LAND",     5,  0.0),
-    ("IDLE",     3,  0.0),
+HZ = 40
+MISSION_PROFILE = [
+    ("TAKEOFF", 4.0,  1.5),   # climb from start (~0.95m) up to 1.5m
+    ("HOVER",   4.0,  1.5),   # hold at 1.5m for 4 seconds
+    ("LAND",    4.0,  0.05),  # descend back toward ground
 ]
 
-# Build step list with RAMPED targets
-# Takeoff and descend ramp gradually instead of jumping
-mission_steps = []
-for label, duration, final_alt in MISSION:
-    steps = duration * HZ
-    if label in ("TAKEOFF", "DESCEND", "LAND"):
-        # Get previous altitude
-        prev_alt = mission_steps[-1][1] if mission_steps else 0.0
-        for i in range(steps):
-            # Linear ramp from prev_alt to final_alt
-            t = i / steps
-            alt = prev_alt + (final_alt - prev_alt) * t
-            mission_steps.append((label, alt))
-    else:
-        mission_steps.extend([(label, final_alt)] * steps)
-
-TOTAL_STEPS = len(mission_steps)
-BASE_THRUST  = 80
+TOTAL_STEPS = int(sum(item[1] for item in MISSION_PROFILE) * HZ)
+BASE_THRUST = 92
 
 env, obs = fresh_start()
 sim_in = SimInput(); att = SimAttitude(); motors = SimMotors()
 
-print(f"Mission: {[(m[0], m[1], m[2]) for m in MISSION]}")
-print(f"Total steps: {TOTAL_STEPS} ({TOTAL_STEPS/HZ:.0f}s) | Ramped takeoff/descend")
-print(f"{'Step':>5} | {'Phase':<8} | {'PosZ':>6} | {'TgtZ':>6} | "
-      f"{'Roll':>7} | {'Pitch':>7} | {'Thrust':>7}")
+print(f"Mission Steps: {TOTAL_STEPS} ({TOTAL_STEPS/HZ}s) | Testing C++ V2 Hardware Code Loop")
+print(f"{'Step':>5} | {'Phase':<8} | {'PosZ':>6} | {'TgtZ':>6} | {'Roll':>7} | {'Pitch':>7} | {'TrueThrust':>10}")
 print("-" * 75)
 
-prev_phase = ""
-
 for step in range(TOTAL_STEPS):
-    phase_label, target_z = mission_steps[step]
+    current_time = step / HZ
+    
+
+    elapsed = 0.0
+    phase_label = "IDLE"
+    target_z = 0.0
+
+    for name, duration, target_alt in MISSION_PROFILE:
+        if current_time <= (elapsed + duration):
+            phase_label = name
+            target_z = target_alt
+            break
+        elapsed += duration
 
     imu_data = imu_sim.get_imu(obs)
     for i in range(min(len(obs), 16)):
         sim_in.obs[i] = float(obs[i])
-
-    # Override target altitude with our ramped mission value
+        
     sim_in.obs[13] = float(target_z)
-
     sim_in.accel_ms2[0] = float(imu_data["accel"][0])
     sim_in.accel_ms2[1] = float(imu_data["accel"][1])
     sim_in.accel_ms2[2] = float(imu_data["accel"][2])
 
-    lib.sim_update_full(ctypes.byref(sim_in),
-                        ctypes.c_float(0.0),
-                        ctypes.c_float(0.0),
-                        ctypes.c_float(0.0),
-                        ctypes.c_uint8(BASE_THRUST),
-                        ctypes.byref(motors),
-                        ctypes.byref(att))
 
-    commanded = np.array(list(motors.m), dtype=np.float32)
-    actual    = motor_lag.step(commanded)
-    actual    = np.clip(actual, 0.0, 1.0)
+    lib.sim_update_highlevel(ctypes.byref(sim_in),
+                             ctypes.c_float(0.0),  # yaw rate
+                             ctypes.c_float(0.0),  # roll_cmd
+                             ctypes.c_float(0.0),  # pitch_cmd
+                             ctypes.c_uint8(BASE_THRUST),
+                             ctypes.byref(motors),
+                             ctypes.byref(att))
 
-    # Cut motors when on ground during LAND/IDLE
-    if phase_label in ("LAND", "IDLE") and obs[10] <= 0.05:
-        actual = np.zeros(4, dtype=np.float32)
+    action = np.array([0.0, 0.0, 0.0, float(motors.m[0])], dtype=np.float32)
 
     try:
-        obs, reward, terminated, truncated, _ = env.step(actual)
+        obs, reward, terminated, truncated, _ = env.step(action)
     except Exception:
         safe_close(env)
         env, obs = fresh_start()
         continue
 
-    # Ignore termination during flight phases — dome is large enough
-    # Only reset on actual physics crash (pos_z deeply negative)
-    if terminated or truncated:
-        if obs[10] < -1.0:
-            print(f"  [CRASH] at step {step}, pos_z={obs[10]:.2f}")
-            safe_close(env)
-            env, obs = fresh_start()
-
     if step % HZ == 0:
-        pos_z  = obs[10]
-        vel_z  = obs[9]
-        thrust = BASE_THRUST + 6.0*(target_z-pos_z) - 5.0*vel_z
-        thrust = max(30, min(200, thrust))
-        print(f"{step:5d} | {phase_label:<8} | {pos_z:6.3f} | {target_z:6.3f} | "
-              f"{att.roll:7.2f}° | {att.pitch:7.2f}° | {thrust:7.1f}")
 
-    if phase_label != prev_phase:
-        print(f"  >>> Phase: {phase_label}")
-        prev_phase = phase_label
+        engine_load_percentage = float(motors.m[0]) * 100.0
+        print(f"{step:5d} | {phase_label:<8} | {obs[11]:6.3f} | {target_z:6.3f} | "
+              f"{att.roll:7.2f}° | {att.pitch:7.2f}° | {engine_load_percentage:8.1f}%")
 
 safe_close(env)
-print("\nMission complete.")
+print("\nFlight sequence complete.")

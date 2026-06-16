@@ -1,5 +1,5 @@
 // compat/Wire.h
-// No-op Wire stub — sim bypasses I2C entirely
+// No-op Wire stub, sim bypasses I2C entirely
 #pragma once
 #include <cstdint>
 

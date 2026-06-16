@@ -53,6 +53,10 @@ void sim_update_full(const SimInput* in,
                      SimAttitude* att_out) {
 
     IMUData imu = imu_from_obs(in->obs, in->accel_ms2);
+    {
+        float mag2 = imu.ax*imu.ax + imu.ay*imu.ay + imu.az*imu.az;
+        imu.isHealthy = (mag2 >= 0.05f*0.05f && mag2 <= 8.0f*8.0f);
+    }
     if (!imu.isHealthy) {
         for (int i = 0; i < 4; i++) motors_out->m[i] = 0.0f;
         return;
@@ -67,24 +71,24 @@ void sim_update_full(const SimInput* in,
     att_out->pitch  = att.pitch;
     att_out->yaw    = att.yaw;
 
-    // ── Altitude PD ───────────────────────────────────────────────────────────
-    float pos_z   = in->obs[10];
-    float tgt_z   = in->obs[13];
-    float vel_z   = in->obs[9];
-    float alt_err = tgt_z - pos_z;
+    float pos_y   = in->obs[11];
+    float tgt_y   = in->obs[13];
+    float vel_y   = in->obs[8];
+    float alt_err = tgt_y - pos_y;
 
-    const float KP_ALT = 6.0f;
-    const float KD_ALT = 5.0f;
+    const float KP_ALT = 2.5f;
+    const float KD_ALT = 2.0f;
+    const float ALT_THRUST_MIN = 60.0f;  
+    const float ALT_THRUST_MAX = 180.0f; 
 
     float thrust_f = (float)base_thrust
-                   + KP_ALT * alt_err
-                   - KD_ALT * vel_z;
+                   + (KP_ALT * alt_err)
+                   - (KD_ALT * vel_y);
 
-    if (thrust_f > MOTOR_MAX) thrust_f = MOTOR_MAX;
-    if (thrust_f < MOTOR_MIN) thrust_f = MOTOR_MIN;
+    if (thrust_f > ALT_THRUST_MAX) thrust_f = ALT_THRUST_MAX;
+    if (thrust_f < ALT_THRUST_MIN) thrust_f = ALT_THRUST_MIN;
     uint8_t thrust = (uint8_t)thrust_f;
 
-    // ── Attitude PD ───────────────────────────────────────────────────────────
     Setpoint sp;
     sp.attitudeDeg.roll          = target_roll;
     sp.attitudeDeg.pitch         = target_pitch;
@@ -93,26 +97,82 @@ void sim_update_full(const SimInput* in,
     sp.attitudeRateDps.pitch     = 0.0f;
     sp.attitudeRateDps.yaw       = target_yaw_rate;
 
-    // ── Re-enable D-term with scaled gyro rates ───────────────────────────────
-    // 0.1 factor accounts for 40Hz vs 500Hz — gyro rates are 12.5x
-    // larger per step at 40Hz, scale them down so D-term doesn't saturate
     AttitudeRateDps rates;
-    rates.roll  = imu.gx * 0.1f;
-    rates.pitch = imu.gy * 0.1f;
-    rates.yaw   = imu.gz * 0.1f;
+    auto clampRate = [](float v) -> float {
+        if (v >  360.0f) return  360.0f;
+        if (v < -360.0f) return -360.0f;
+        return v;
+    };
+    rates.roll  = clampRate(imu.gx * 0.1f);
+    rates.pitch = clampRate(imu.gy * 0.1f);
+    rates.yaw   = clampRate(imu.gz * 0.1f);
 
-    s_pid.reset();
     ControlOutput ctrl = s_pid.update(sp, att, rates);
 
-    const float GAIN_SCALE = 0.003f;
+    const float GAIN_SCALE = 0.08f;
     ctrl.roll  *= GAIN_SCALE;
     ctrl.pitch *= GAIN_SCALE;
     ctrl.yaw   *= GAIN_SCALE;
 
     MotorMix mix = s_mixer.mixX(thrust, ctrl);
 
-    motors_out->m[0] = mix.m1 / (float)MOTOR_MAX;
-    motors_out->m[1] = mix.m2 / (float)MOTOR_MAX;
-    motors_out->m[2] = mix.m3 / (float)MOTOR_MAX;
-    motors_out->m[3] = mix.m4 / (float)MOTOR_MAX;
+    motors_out->m[0] = mix.m1;
+    motors_out->m[1] = mix.m2;
+    motors_out->m[2] = mix.m3;
+    motors_out->m[3] = mix.m4;
+
+}
+
+void sim_update_highlevel(const SimInput* in,
+                          float    target_yaw_rate,
+                          float    roll_cmd,
+                          float    pitch_cmd,
+                          uint8_t  base_thrust,
+                          SimMotors* motors_out,
+                          SimAttitude* att_out) {
+
+    (void)target_yaw_rate; (void)roll_cmd; (void)pitch_cmd;
+
+    IMUData imu = imu_from_obs(in->obs, in->accel_ms2);
+    {
+        float mag2 = imu.ax*imu.ax + imu.ay*imu.ay + imu.az*imu.az;
+        imu.isHealthy = (mag2 >= 0.05f*0.05f && mag2 <= 8.0f*8.0f);
+    }
+    if (!imu.isHealthy) {
+        motors_out->m[0] = 0.0f;
+        motors_out->m[1] = 0.0f;
+        motors_out->m[2] = 0.0f;
+        motors_out->m[3] = 0.0f;
+        return;
+    }
+
+    s_fusion.update(imu.gx, imu.gy, imu.gz,
+                    imu.ax, imu.ay, imu.az,
+                    SIM_DT);
+    AttitudeDeg att = s_fusion.attitude();
+    att_out->roll   = att.roll;
+    att_out->pitch  = att.pitch;
+    att_out->yaw    = att.yaw;
+
+    float pos_y = in->obs[11];
+    float tgt_y = in->obs[13];
+    float vel_y = in->obs[8];
+    float alt_err = tgt_y - pos_y;
+
+    const float KP_ALT = 0.15f;   
+    const float KD_ALT = 0.12f;
+    const float THRUST_BASE  = 0.30f;   
+    const float THRUST_MIN   = 0.05f;
+    const float THRUST_MAX   = 0.80f;   
+
+    float thrust = THRUST_BASE
+                 + (KP_ALT * alt_err)
+                 - (KD_ALT * vel_y);
+    if (thrust > THRUST_MAX) thrust = THRUST_MAX;
+    if (thrust < THRUST_MIN) thrust = THRUST_MIN;
+
+    motors_out->m[0] = thrust;
+    motors_out->m[1] = (float)base_thrust;   
+    motors_out->m[2] = 0.0f;
+    motors_out->m[3] = 0.0f;
 }
